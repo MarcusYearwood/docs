@@ -1,0 +1,263 @@
+---
+title: "Stores"
+description: "Persist tasks, traces, and resources"
+---
+
+# Stores
+
+The `LightningStore` is the central persistence layer that keeps tasks, resources, and traces in sync across your training infrastructure.
+
+## Store Options
+
+### InMemoryLightningStore
+
+For local development and single-machine training:
+
+```python
+from mantisdk.store import InMemoryLightningStore
+
+store = InMemoryLightningStore()
+
+# With thread-safety for multi-runner scenarios
+store = InMemoryLightningStore(thread_safe=True)
+```
+
+### LightningStoreClient
+
+For distributed training, connect to a remote store server:
+
+```python
+from mantisdk.store import LightningStoreClient
+
+store = LightningStoreClient("http://localhost:45993")
+
+# Use with trainer
+trainer = Trainer(store=store, n_runners=8)
+trainer.fit(agent=my_agent, train_dataset=tasks)
+
+# Don't forget to close when done
+await store.close()
+```
+
+### InsightLightningStore
+
+For integration with the Mantis observability platform:
+
+```python
+from mantisdk.store import InsightLightningStore
+
+store = InsightLightningStore(
+    endpoint="https://your-mantis-instance.com",
+    api_key="your-api-key",
+)
+```
+
+## Serving a Store
+
+### LightningStoreServer
+
+Run a store server for distributed training:
+
+```python
+from mantisdk.store import LightningStoreServer
+
+server = LightningStoreServer(port=45993)
+server.run()
+```
+
+### CLI
+
+The easiest way to serve a store:
+
+```bash
+# Basic server
+msk store --port 45993
+
+# With debug logging
+msk store --port 45993 --log-level DEBUG
+
+# Custom host
+msk store --host 0.0.0.0 --port 45993
+```
+
+## Store Operations
+
+### Starting Rollouts
+
+```python
+from mantisdk.store import InMemoryLightningStore
+
+store = InMemoryLightningStore()
+
+# Start a new rollout
+rollout = await store.start_rollout(input={"task": "example"})
+print(f"Rollout ID: {rollout.rollout_id}")
+print(f"Attempt ID: {rollout.attempt.attempt_id}")
+```
+
+### Managing Resources
+
+```python
+from mantisdk.types import PromptTemplate
+
+# Set a resource
+await store.set_resource(
+    "prompt_template",
+    PromptTemplate(template="Answer: {question}", engine="f-string")
+)
+
+# Get a resource
+prompt = await store.get_resource("prompt_template")
+
+# Set multiple resources
+await store.set_resources({
+    "system_prompt": "You are helpful.",
+    "temperature": 0.7,
+})
+```
+
+### Querying Spans
+
+```python
+# Get all spans for a rollout
+spans = await store.query_spans(rollout_id="ro-abc123")
+
+# Process spans
+for span in spans:
+    print(f"{span.name}: {span.attributes}")
+```
+
+### Task Queue Operations
+
+```python
+# Enqueue a task
+await store.enqueue_task({"question": "What is 2+2?"})
+
+# Claim a task (for runners)
+task = await store.claim_task()
+
+# Check for pending work
+has_work = await store.has_pending_rollouts()
+```
+
+## Distributed Training Architecture
+
+```
+┌─────────────────┐
+│   Algorithm     │
+│   (Optimizer)   │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ LightningStore  │◄────── msk store --port 45993
+│    (Server)     │
+└────────┬────────┘
+         │
+    ┌────┴────┬────────┬────────┐
+    ▼         ▼        ▼        ▼
+┌───────┐ ┌───────┐ ┌───────┐ ┌───────┐
+│Runner │ │Runner │ │Runner │ │Runner │
+│   1   │ │   2   │ │   3   │ │   4   │
+└───────┘ └───────┘ └───────┘ └───────┘
+```
+
+### Example: Multi-Machine Setup
+
+**Machine 1 (Store + Algorithm):**
+
+```bash
+# Start the store server
+msk store --port 45993 --host 0.0.0.0
+```
+
+```python
+# Run algorithm
+from mantisdk import Trainer
+from mantisdk.store import LightningStoreClient
+from mantisdk.algorithm import GEPA
+
+store = LightningStoreClient("http://localhost:45993")
+trainer = Trainer(
+    store=store,
+    algorithm=GEPA(),
+    n_runners=0,  # No local runners
+)
+trainer.fit(agent=None, train_dataset=tasks)  # Algorithm only
+```
+
+**Machines 2-N (Runners):**
+
+```python
+from mantisdk import Trainer
+from mantisdk.store import LightningStoreClient
+
+store = LightningStoreClient("http://machine1:45993")
+trainer = Trainer(
+    store=store,
+    algorithm=None,  # No algorithm
+    n_runners=4,     # Run 4 runners per machine
+)
+trainer.fit(agent=my_agent, train_dataset=None)  # Runners only
+```
+
+## Store Capabilities
+
+Check what a store supports:
+
+```python
+store = InMemoryLightningStore()
+
+# Check capabilities
+caps = store.capabilities
+print(f"Supports OTLP: {caps.get('otlp_traces', False)}")
+```
+
+## Store Statistics
+
+Monitor store health:
+
+```python
+stats = await store.get_statistics()
+print(f"Total rollouts: {stats.total_rollouts}")
+print(f"Completed: {stats.completed_rollouts}")
+print(f"Pending: {stats.pending_rollouts}")
+```
+
+## Thread-Safe Store
+
+For multi-threaded scenarios:
+
+```python
+from mantisdk.store import LightningStoreThreaded, InMemoryLightningStore
+
+# Wrap any store for thread safety
+base_store = InMemoryLightningStore()
+threaded_store = LightningStoreThreaded(base_store)
+```
+
+## MongoDB Backend
+
+For persistent storage with MongoDB:
+
+```python
+from mantisdk.store import CollectionBasedLightningStore
+from pymongo import MongoClient
+
+client = MongoClient("mongodb://localhost:27017")
+db = client["mantisdk"]
+
+store = CollectionBasedLightningStore(
+    tasks_collection=db["tasks"],
+    spans_collection=db["spans"],
+    resources_collection=db["resources"],
+)
+```
+
+## Best Practices
+
+1. **Use InMemory for development** - Fast and requires no setup
+2. **Use Client/Server for distributed training** - Scales to many runners
+3. **Enable thread-safety when needed** - Multi-runner single-machine scenarios
+4. **Monitor statistics** - Track rollout completion rates
+5. **Close clients properly** - Always call `await store.close()` when using `LightningStoreClient`

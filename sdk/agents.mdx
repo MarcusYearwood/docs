@@ -1,0 +1,287 @@
+---
+title: "Agents"
+description: "Create trainable agents with LitAgent"
+---
+
+# Agents
+
+Mantisdk provides flexible ways to create trainable agents. You can use the `@rollout` decorator for simple functions or subclass `LitAgent` for more control.
+
+## The Key: Emit Rewards
+
+No matter how you structure your agent, the critical part is emitting rewards:
+
+```python
+import mantisdk as msk
+
+# At the end of your agent's work, emit the reward
+msk.emit_reward(score)  # 0.0 to 1.0
+```
+
+This tells the training system how well your agent performed.
+
+## LitAgent Base Class
+
+`LitAgent` is the base class for implementing agent rollouts:
+
+```python
+from mantisdk import LitAgent
+import mantisdk as msk
+from mantisdk.types import NamedResources, Rollout
+
+class MyAgent(LitAgent):
+    def rollout(self, task, resources: NamedResources, rollout: Rollout):
+        """Execute a single rollout.
+
+        Args:
+            task: The task payload from your dataset
+            resources: Named resources (prompts, models, etc.)
+            rollout: Rollout metadata
+        """
+        # Your agent logic
+        result = self.process(task)
+
+        # Always emit the reward
+        msk.emit_reward(result["score"])
+        return None
+```
+
+### Rollout Methods
+
+| Method | Description |
+|--------|-------------|
+| `rollout(task, resources, rollout)` | Sync rollout for both training and validation |
+| `rollout_async(task, resources, rollout)` | Async version of rollout |
+| `training_rollout(...)` | Override for training-specific behavior |
+| `validation_rollout(...)` | Override for validation-specific behavior |
+
+### Return Values
+
+The rollout method can return:
+
+- `None` - Let the tracer handle span collection (recommended)
+- `float` - A reward value
+- `List[Span]` - Explicit spans to record
+
+## The `@rollout` Decorator
+
+For simpler agents, use the decorator approach:
+
+```python
+from mantisdk.litagent import rollout
+import mantisdk as msk
+
+@rollout
+def simple_agent(task: dict) -> float:
+    # Process the task
+    result = call_llm(task["prompt"])
+    score = evaluate(result, task["expected"])
+
+    # Emit reward
+    msk.emit_reward(score)
+    return score
+```
+
+### With Prompt Templates
+
+Access resources like prompt templates:
+
+```python
+from mantisdk.litagent import rollout
+from mantisdk.types import PromptTemplate
+import mantisdk as msk
+
+@rollout
+def templated_agent(task: dict, prompt_template: PromptTemplate) -> float:
+    # Format the prompt using the template
+    prompt = prompt_template.format(**task)
+
+    response = call_llm(prompt)
+    score = evaluate(response)
+
+    msk.emit_reward(score)
+    return score
+```
+
+## Async Agents
+
+Implement async rollouts for non-blocking execution:
+
+```python
+from mantisdk import LitAgent
+import mantisdk as msk
+
+class AsyncAgent(LitAgent):
+    def is_async(self) -> bool:
+        return True
+
+    async def rollout_async(self, task, resources, rollout):
+        # Async operations
+        result = await self.async_call_api(task)
+        msk.emit_reward(result["score"])
+        return None
+
+    async def async_call_api(self, task):
+        # Your async logic
+        pass
+```
+
+## Framework Integrations
+
+### LangChain
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from mantisdk.litagent import rollout
+import mantisdk as msk
+
+@rollout
+def langchain_agent(task: dict) -> float:
+    llm = ChatOpenAI(model="gpt-4o-mini")
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are a helpful assistant."),
+        ("user", "{input}")
+    ])
+
+    chain = prompt | llm
+    response = chain.invoke({"input": task["question"]})
+
+    score = evaluate(response.content, task["expected"])
+    msk.emit_reward(score)
+    return score
+```
+
+### OpenAI Agent SDK
+
+```python
+from openai import OpenAI
+from mantisdk.litagent import rollout
+import mantisdk as msk
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search",
+            "description": "Search for information",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"}
+                }
+            }
+        }
+    }
+]
+
+@rollout
+def openai_agent(task: dict) -> float:
+    client = OpenAI()
+
+    messages = [{"role": "user", "content": task["query"]}]
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        tools=TOOLS,
+        tool_choice="auto"
+    )
+
+    # Process tool calls...
+    score = evaluate_result(response)
+    msk.emit_reward(score)
+    return score
+```
+
+### AutoGen
+
+```python
+from autogen import AssistantAgent, UserProxyAgent
+from mantisdk import LitAgent
+import mantisdk as msk
+
+class AutoGenAgent(LitAgent):
+    def rollout(self, task, resources, rollout):
+        assistant = AssistantAgent(
+            name="assistant",
+            system_message=resources.get("system_prompt", "")
+        )
+        user_proxy = UserProxyAgent(name="user_proxy")
+
+        user_proxy.initiate_chat(assistant, message=task["input"])
+
+        # Evaluate the conversation
+        score = self.evaluate_chat(user_proxy.chat_messages)
+        msk.emit_reward(score)
+        return None
+```
+
+### CrewAI
+
+```python
+from crewai import Agent, Task, Crew
+from mantisdk import LitAgent
+import mantisdk as msk
+
+class CrewAgent(LitAgent):
+    def rollout(self, task_input, resources, rollout):
+        researcher = Agent(
+            role="Researcher",
+            goal="Research the topic",
+            backstory=resources.get("researcher_backstory", "")
+        )
+
+        task = Task(
+            description=task_input["description"],
+            agent=researcher
+        )
+
+        crew = Crew(agents=[researcher], tasks=[task])
+        result = crew.kickoff()
+
+        score = evaluate(result, task_input["expected"])
+        msk.emit_reward(score)
+        return None
+```
+
+## Agent Lifecycle Hooks
+
+Override lifecycle methods for custom behavior:
+
+```python
+import time
+
+class HookedAgent(LitAgent):
+    def on_rollout_start(self, task, runner, tracer):
+        """Called before each rollout."""
+        self.start_time = time.time()
+
+    def on_rollout_end(self, task, rollout, runner, tracer):
+        """Called after each rollout."""
+        duration = time.time() - self.start_time
+        print(f"Rollout completed in {duration:.2f}s")
+
+    def rollout(self, task, resources, rollout):
+        # Your logic
+        pass
+```
+
+## Accessing Trainer and Runner
+
+Within your agent, access the training context:
+
+```python
+class ContextAwareAgent(LitAgent):
+    def rollout(self, task, resources, rollout):
+        # Access the trainer
+        trainer = self.trainer
+        store = trainer.store
+
+        # Access the runner
+        runner = self.runner
+        tracer = self.tracer
+
+        # Your logic here
+        pass
+```

@@ -1,0 +1,285 @@
+---
+title: "Tracers"
+description: "Training-integrated tracers for the Trainer"
+---
+
+# Tracers
+
+The `mantisdk.tracer` module provides tracer classes designed for the training loop. These tracers integrate with the `Trainer`, `Runner`, and `LightningStore` to capture traces during agent rollouts and feed them to training algorithms.
+
+```python
+from mantisdk.tracer import OtelTracer, AgentOpsTracer, DummyTracer
+```
+
+## When to Use Tracers
+
+| Scenario | Tracer |
+|----------|--------|
+| Standard training | `OtelTracer` |
+| Training with AgentOps monitoring | `AgentOpsTracer` |
+| Testing without tracing overhead | `DummyTracer` |
+
+For production observability outside of training, use [`mantisdk.tracing`](/sdk/tracing) instead.
+
+---
+
+## OtelTracer
+
+OpenTelemetry-based tracer for training:
+
+```python
+from mantisdk import Trainer
+from mantisdk.tracer import OtelTracer
+
+tracer = OtelTracer()
+trainer = Trainer(tracer=tracer, n_runners=4)
+trainer.fit(agent=my_agent, train_dataset=tasks)
+```
+
+---
+
+## AgentOpsTracer
+
+Integrates with [AgentOps](https://agentops.ai) for enhanced agent monitoring during training:
+
+```python
+from mantisdk.tracer import AgentOpsTracer
+
+tracer = AgentOpsTracer(
+    agentops_managed=True,    # Auto-initialize AgentOps client
+    instrument_managed=True,  # Auto-instrument LLM libraries
+)
+trainer = Trainer(tracer=tracer, n_runners=4)
+```
+
+### Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `agentops_managed` | `True` | Auto-initialize AgentOps client |
+| `instrument_managed` | `True` | Auto-instrument LLM libraries |
+| `daemon` | `True` | Run AgentOps server as daemon |
+
+### LangChain Callback Handler
+
+```python
+tracer = AgentOpsTracer()
+
+# Get LangChain callback handler
+handler = tracer.get_langchain_handler(tags=["production"])
+
+from langchain_openai import ChatOpenAI
+llm = ChatOpenAI(callbacks=[handler])
+```
+
+### Local Mode
+
+Run without sending data to the remote AgentOps service:
+
+```python
+from mantisdk.instrumentation.agentops import enable_agentops_service
+
+enable_agentops_service(False)  # Local tracing only
+tracer = AgentOpsTracer()
+```
+
+---
+
+## DummyTracer
+
+For testing without actual tracing:
+
+```python
+from mantisdk.tracer import DummyTracer
+
+tracer = DummyTracer()
+trainer = Trainer(tracer=tracer, n_runners=1)
+```
+
+---
+
+## Trace Context for Rollouts
+
+Tracers provide `trace_context` for grouping spans by rollout:
+
+```python
+from mantisdk.tracer import OtelTracer
+from mantisdk.store import InMemoryLightningStore
+import mantisdk as msk
+
+tracer = OtelTracer()
+store = InMemoryLightningStore()
+
+rollout = await store.start_rollout(input={"task": "example"})
+
+with tracer.lifespan(store):
+    async with tracer.trace_context(
+        "my-trace",
+        store=store,
+        rollout_id=rollout.rollout_id,
+        attempt_id=rollout.attempt.attempt_id,
+    ) as trace:
+        with trace.start_as_current_span("step-1"):
+            pass
+        with trace.start_as_current_span("step-2"):
+            msk.emit_reward(1.0)
+```
+
+---
+
+## emit_reward() (Training Signal)
+
+The most important function for training. Call this at the end of every rollout:
+
+```python
+import mantisdk as msk
+
+msk.emit_reward(0.85)  # 0.0 = bad, 1.0 = perfect
+```
+
+### Multi-Dimensional Rewards
+
+Track multiple aspects of performance:
+
+```python
+msk.emit_reward(
+    {"accuracy": 0.9, "efficiency": 0.7, "safety": 1.0},
+    primary_key="accuracy"  # Required for multi-dimensional
+)
+```
+
+### With Tags
+
+```python
+from mantisdk.utils.otel import make_tag_attributes
+
+msk.emit_reward(
+    0.9,
+    attributes=make_tag_attributes(["production", "high-priority"])
+)
+```
+
+### Reward Utilities
+
+```python
+from mantisdk.emitter import (
+    emit_reward,
+    get_reward_value,
+    find_reward_spans,
+    find_final_reward,
+)
+
+reward = get_reward_value(span)
+reward_spans = find_reward_spans(spans)
+final = find_final_reward(spans)
+```
+
+---
+
+## Additional Emitters
+
+### emit_message()
+
+Log messages as spans:
+
+```python
+from mantisdk import emit_message
+
+emit_message("Processing task started")
+emit_message("LLM call completed", attributes={"model": "gpt-4", "tokens": 150})
+```
+
+### emit_annotation()
+
+Create custom annotation spans:
+
+```python
+from mantisdk import emit_annotation
+
+emit_annotation({
+    "event_type": "tool_call",
+    "tool_name": "search",
+    "latency_ms": 234,
+})
+```
+
+### operation()
+
+Track logical units of work:
+
+```python
+from mantisdk import operation
+
+with operation(user_id="123", task_type="search") as op:
+    op.set_input(query="What is AI?")
+    result = perform_search("What is AI?")
+    op.set_output(result)
+
+# Or as a decorator
+@operation(category="search")
+def search_function(query: str):
+    return search(query)
+```
+
+---
+
+## Querying Spans
+
+Retrieve spans from the store:
+
+```python
+from mantisdk.store import InMemoryLightningStore
+
+store = InMemoryLightningStore()
+spans = await store.query_spans(rollout_id="ro-abc123")
+
+for span in spans:
+    print(f"Span: {span.name}")
+    print(f"  Attributes: {span.attributes}")
+```
+
+## Linking Spans
+
+```python
+import mantisdk as msk
+from mantisdk import operation
+from mantisdk.utils.otel import make_link_attributes
+
+with operation(conversation_id="conv-123") as op:
+    op.set_input(message="Hello")
+    response = get_response()
+    op.set_output(response)
+
+link_attrs = make_link_attributes({"conversation_id": "conv-123"})
+msk.emit_reward(0.95, attributes=link_attrs)
+```
+
+---
+
+## Tracer Base Class
+
+All tracers inherit from the `Tracer` base class:
+
+```python
+from mantisdk.tracer import Tracer
+
+class CustomTracer(Tracer):
+    def trace_context(self, name=None, *, store=None, rollout_id=None, attempt_id=None):
+        # Implement trace context
+        pass
+
+    def get_last_trace(self):
+        # Return list of spans from last trace
+        pass
+```
+
+### Key Methods
+
+| Method | Description |
+|--------|-------------|
+| `init_worker(worker_id, store)` | Initialize tracer for a worker |
+| `teardown_worker(worker_id)` | Clean up worker resources |
+| `trace_context(...)` | Context manager for tracing rollouts |
+| `get_last_trace()` | Get spans from the last trace |
+| `get_langchain_handler()` | Get LangChain callback handler |
+| `lifespan(store)` | Context manager for tracer lifecycle |

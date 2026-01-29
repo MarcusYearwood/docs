@@ -1,0 +1,246 @@
+---
+title: "Tracing"
+description: "Standalone observability for production monitoring"
+---
+
+# Tracing
+
+The `mantisdk.tracing` module provides standalone observability for monitoring agents in production, debugging, or any context outside of training. It sends traces to Insight or any OTLP-compatible backend.
+
+```python
+import mantisdk.tracing as tracing
+```
+
+For training-integrated tracers (used with `Trainer`), see [Tracers](/sdk/tracers).
+
+---
+
+## Quick Start
+
+```python
+import mantisdk.tracing as tracing
+
+# Initialize (auto-detects Insight from environment)
+tracing.init()
+tracing.instrument()  # Auto-instrument LLM libraries
+
+# Your code with tracing
+with tracing.trace("my-workflow"):
+    with tracing.span("step-1"):
+        result = do_work()
+
+    with tracing.tool("search", input={"query": "test"}):
+        search_result = search("test")
+
+# Cleanup
+tracing.shutdown()
+```
+
+---
+
+## Initialization
+
+```python
+import mantisdk.tracing as tracing
+
+# Auto-detect Insight from environment variables
+tracing.init()
+
+# Or configure explicitly
+tracing.init(
+    service_name="my-service",
+    endpoint="https://your-insight-instance.com/v1/traces",
+    headers={"Authorization": "Bearer your-key"},
+)
+```
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `INSIGHT_HOST` | Insight instance URL |
+| `INSIGHT_PUBLIC_KEY` | Public API key |
+| `INSIGHT_SECRET_KEY` | Secret API key |
+| `INSIGHT_OTLP_ENDPOINT` | Custom OTLP endpoint |
+
+---
+
+## Auto-Instrumentation (OpenInference)
+
+Automatically instrument popular LLM libraries:
+
+```python
+import mantisdk.tracing as tracing
+
+tracing.init()
+tracing.instrument()  # Instruments all available libraries
+
+# Now all LLM calls are automatically traced
+from openai import OpenAI
+client = OpenAI()
+response = client.chat.completions.create(...)  # Automatically traced
+```
+
+### Supported Libraries
+
+| Library | Instrumentor |
+|---------|-------------|
+| OpenAI | `openai` |
+| Anthropic | `anthropic` |
+| LangChain | `langchain` |
+| LlamaIndex | `llama_index` |
+| LiteLLM | `litellm` |
+| Claude Agent SDK | `claude_agent_sdk` |
+| Google ADK | `google_adk` |
+| MistralAI | `mistral` |
+| Groq | `groq` |
+| AWS Bedrock | `bedrock` |
+| Google VertexAI | `vertexai` |
+| DSPy | `dspy` |
+| Instructor | `instructor` |
+| CrewAI | `crewai` |
+
+### Selective Instrumentation
+
+```python
+# Instrument specific libraries only
+tracing.instrument(names=["openai", "anthropic"])
+
+# Or instrument all except specific ones
+tracing.instrument(skip=["litellm"])
+```
+
+---
+
+## Manual Spans
+
+### trace()
+
+Creates a new trace (root span):
+
+```python
+import mantisdk.tracing as tracing
+
+with tracing.trace("workflow-name") as trace_span:
+    trace_span.set_attribute("user_id", "123")
+    do_work()
+```
+
+### span()
+
+Creates a nested span within the current trace:
+
+```python
+with tracing.trace("my-workflow"):
+    with tracing.span("step-1") as span:
+        span.set_attribute("item_count", 100)
+        process_items()
+
+    with tracing.span("step-2"):
+        more_work()
+```
+
+### tool()
+
+Creates a span for tool/function calls with input/output tracking:
+
+```python
+with tracing.trace("my-workflow"):
+    with tracing.tool("database_query", input={"table": "users"}):
+        users = db.query("SELECT * FROM users")
+
+    with tracing.tool("api_call", input={"endpoint": "/search"}):
+        results = api.search(query)
+```
+
+---
+
+## Async Support
+
+Async versions are available for all context managers:
+
+```python
+import mantisdk.tracing as tracing
+
+async def my_workflow():
+    async with tracing.atrace("async-workflow"):
+        async with tracing.aspan("fetch-data"):
+            data = await fetch_data()
+
+        async with tracing.aspan("process"):
+            result = await process(data)
+
+        return result
+```
+
+---
+
+## Decorators
+
+Use decorators for automatic function tracing:
+
+```python
+from mantisdk.tracing import trace_decorator, tool_decorator
+
+@trace_decorator("my-function")
+def my_function():
+    return do_work()
+
+@tool_decorator("search-tool")
+def search(query: str):
+    return search_api(query)
+
+# Async decorators work too
+@trace_decorator("async-workflow")
+async def async_workflow():
+    return await do_async_work()
+```
+
+---
+
+## Lifecycle Management
+
+```python
+import mantisdk.tracing as tracing
+
+tracing.init()
+
+try:
+    # Your application code
+    run_app()
+finally:
+    tracing.flush()     # Flush pending spans
+    tracing.shutdown()  # Clean shutdown
+```
+
+### Functions
+
+| Function | Description |
+|----------|-------------|
+| `init()` | Initialize tracing with Insight auto-detect |
+| `instrument()` | Auto-instrument LLM libraries |
+| `flush()` | Flush pending spans to backend |
+| `shutdown()` | Clean shutdown of tracing |
+
+---
+
+## Context Managers Reference
+
+| Context Manager | Description |
+|-----------------|-------------|
+| `trace(name)` | Create a new trace (root span) |
+| `span(name)` | Create a nested span |
+| `tool(name, input)` | Create a tool/function span |
+| `atrace(name)` | Async version of trace |
+| `aspan(name)` | Async version of span |
+
+---
+
+## Best Practices
+
+1. **Initialize once at startup** - Call `tracing.init()` at application start
+2. **Use meaningful names** - Name traces and spans descriptively
+3. **Add attributes** - Include relevant context in span attributes
+4. **Use tool() for function calls** - Tracks input/output automatically
+5. **Always shutdown** - Call `tracing.flush()` and `tracing.shutdown()` on exit
+6. **Use environment variables** - Configure via env vars for different environments

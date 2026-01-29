@@ -1,0 +1,148 @@
+---
+title: "Introduction"
+description: "Train and optimize AI agents with reinforcement learning"
+---
+
+# Mantisdk
+
+Mantisdk is an AI agent training and evaluation platform that enables you to optimize agents using reinforcement learning, automatic prompt optimization, and supervised fine-tuning with near-zero code changes.
+
+## Installation
+
+```bash
+pip install mantisdk
+```
+
+## Tracing First
+
+The foundation of mantisdk is **tracing**. Before you can train or optimize an agent, you need to capture what it's doing. The key function is `emit_reward()`:
+
+```python
+import mantisdk as msk
+
+# After your agent completes a task, emit a reward
+msk.emit_reward(0.85)  # Score between 0 and 1
+```
+
+This simple call captures the outcome of your agent's execution and feeds it into the training loop. Everything else builds on top of this.
+
+### Quick Tracing Example
+
+```python
+import mantisdk as msk
+from mantisdk.litagent import rollout
+
+@rollout
+def my_agent(task: dict) -> float:
+    # Your agent logic here
+    result = process_task(task)
+
+    # Emit the reward - this is what enables training
+    score = evaluate(result, task["expected"])
+    msk.emit_reward(score)
+
+    return score
+```
+
+## Core Concepts
+
+### Trainer
+
+The [`Trainer`](/sdk/training) orchestrates the entire training loop, connecting your agent, algorithm, store, and runners.
+
+```python
+from mantisdk import Trainer
+
+trainer = Trainer(
+    algorithm=algo,
+    n_runners=4,
+    initial_resources={"prompt": my_prompt}
+)
+trainer.fit(agent=my_agent, train_dataset=dataset)
+```
+
+### LitAgent
+
+[`LitAgent`](/sdk/agents) is the base class for implementing agent rollouts. Subclass it and override the `rollout()` method.
+
+```python
+from mantisdk import LitAgent
+
+class MyAgent(LitAgent):
+    def rollout(self, task, resources, rollout):
+        # Your agent logic here
+        return reward
+```
+
+### Store
+
+The [`LightningStore`](/sdk/stores) persists tasks, traces, and resources. Use `InMemoryLightningStore` for local development or `LightningStoreClient` for distributed training.
+
+### Tracer
+
+[Tracers](/sdk/tracing) capture telemetry from your agent's execution. Choose from `OtelTracer`, `AgentOpsTracer`, or others based on your observability stack.
+
+### Algorithm
+
+[Algorithms](/sdk/training) consume traces and improve agent behavior. Built-in options include `APO`, `GEPA`, `VERL`, and `Baseline`.
+
+## Quick Example
+
+```python
+import mantisdk as msk
+from mantisdk import Trainer, LitAgent
+
+class SimpleAgent(LitAgent):
+    def rollout(self, task, resources, rollout):
+        # Run your agent logic
+        result = process_task(task)
+
+        # Emit a reward for training
+        msk.emit_reward(compute_score(result))
+        return None
+
+trainer = Trainer(n_runners=2)
+trainer.dev(agent=SimpleAgent(), train_dataset=tasks)
+```
+
+## Framework Integrations
+
+Mantisdk works with any agent framework:
+
+- **LangChain** - Wrap your chains with the `@rollout` decorator
+- **OpenAI Agent SDK** - Use function calling with automatic tracing
+- **AutoGen** - Multi-agent systems with selective optimization
+- **CrewAI** - Train crew members individually or together
+- **Raw Python** - Works without any framework
+
+## Auto-Instrumentation
+
+Mantisdk provides automatic instrumentation via OpenInference for popular LLM libraries:
+
+```python
+import mantisdk.tracing as tracing
+
+tracing.init()
+tracing.instrument()  # Auto-instruments all available libraries
+```
+
+Supported: OpenAI, Anthropic, LangChain, LlamaIndex, LiteLLM, Claude Agent SDK, MistralAI, Groq, AWS Bedrock, Google VertexAI, DSPy, Instructor, CrewAI, and Google ADK.
+
+See [Tracing](/sdk/tracing) for details on selective instrumentation and AgentOps integration.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/sdk/quickstart">
+    Build your first trainable agent in minutes
+  </Card>
+  <Card title="Tracing" icon="chart-line" href="/sdk/tracing">
+    Learn about emit_reward and observability
+  </Card>
+  <Card title="Agents" icon="robot" href="/sdk/agents">
+    Learn about LitAgent and rollout methods
+  </Card>
+  <Card title="Training" icon="graduation-cap" href="/sdk/training">
+    Explore algorithms like GEPA and APO
+  </Card>
+</CardGroup>

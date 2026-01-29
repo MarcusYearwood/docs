@@ -1,0 +1,398 @@
+---
+title: "Training"
+description: "Orchestrate agent training with Trainer and Algorithms"
+---
+
+# Training
+
+The `Trainer` class orchestrates the training loop, connecting your agent with algorithms, stores, and runners.
+
+## Using the Trainer
+
+### Basic Usage
+
+```python
+from mantisdk import Trainer
+
+trainer = Trainer(
+    n_runners=4,           # Number of parallel runners
+    max_rollouts=100,      # Max rollouts per runner
+)
+
+# Development mode - fast iteration without optimization
+trainer.dev(agent=my_agent, train_dataset=tasks)
+
+# Training mode - with algorithm for optimization
+trainer.fit(agent=my_agent, train_dataset=tasks, val_dataset=val_tasks)
+```
+
+### Trainer Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `algorithm` | `Algorithm` | Training algorithm (APO, GEPA, VERL, etc.) |
+| `n_runners` | `int` | Number of parallel agent runners |
+| `max_rollouts` | `int` | Maximum rollouts per runner |
+| `initial_resources` | `NamedResources` | Starting resources (prompts, etc.) |
+| `tracer` | `Tracer` | Telemetry tracer |
+| `store` | `LightningStore` | Persistence backend |
+| `adapter` | `TraceAdapter` | Converts traces to algorithm input |
+| `llm_proxy` | `LLMProxy` | Proxy for LLM calls (used by GEPA) |
+
+## GEPA (Guided Evolution for Prompt Adaptation)
+
+GEPA is the recommended algorithm for prompt optimization. It reflects on failed rollouts and proposes improved prompts.
+
+### Complete GEPA Example
+
+```python
+import json
+from typing import List
+from openai import OpenAI
+from pydantic import BaseModel, Field
+
+import mantisdk as msk
+from mantisdk import Trainer, setup_logging
+from mantisdk.adapter import TraceToMessages
+from mantisdk.algorithm.gepa import GEPA
+from mantisdk.types import PromptTemplate, LLM
+from mantisdk.litagent import rollout
+
+# Setup logging
+setup_logging()
+
+# Define task type
+class Task(dict):
+    pass
+
+# Define grading response
+class GradeResponse(BaseModel):
+    score: float = Field(description="Score from 0 to 1")
+    reason: str = Field(description="Reason for the score")
+
+# Define your agent
+@rollout
+def my_agent(task: Task, prompt_template: PromptTemplate, llm: LLM) -> float:
+    """Agent that uses the LLM proxy for training."""
+    # Use LLM proxy endpoint (enables training)
+    client = OpenAI(
+        base_url=llm.endpoint,
+        api_key=llm.api_key or "dummy",
+    )
+
+    # Format prompt with template
+    user_message = prompt_template.format(**task)
+
+    response = client.chat.completions.create(
+        model=llm.model,
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": user_message},
+        ],
+        temperature=0.0,
+    )
+
+    result = response.choices[0].message.content
+
+    # Grade the result
+    score = grade_result(client, result, task["expected"], llm.model)
+
+    # Emit reward for training
+    msk.emit_reward(score)
+    return score
+
+def grade_result(client, result, expected, model):
+    """Grade agent output with LLM judge."""
+    judge = client.chat.completions.parse(
+        model=model,
+        messages=[{
+            "role": "user",
+            "content": f"Grade this response:\nOutput: {result}\nExpected: {expected}\nScore 0-1."
+        }],
+        response_format=GradeResponse,
+        temperature=0.0,
+    )
+    return GradeResponse.model_validate_json(judge.choices[0].message.content).score
+
+# Configure GEPA algorithm
+algo = GEPA[Task](
+    max_metric_calls=20,           # Budget: 20 evaluations total
+    reflection_minibatch_size=3,   # Reflect on batches of 3 failed tasks
+    rollout_batch_timeout=300.0,   # 5 minute timeout per batch
+    skip_perfect_score=False,      # Still reflect even on perfect scores
+)
+
+# Configure LLM proxy
+llm_proxy_config = {
+    "type": "mantisdk.LLMProxy",
+    "model_list": [
+        {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": {"model": "gpt-4o-mini"}
+        }
+    ],
+    "callbacks": ["opentelemetry"],
+    "launch_mode": "thread",
+}
+
+# Create trainer
+trainer = Trainer(
+    algorithm=algo,
+    n_runners=2,
+    initial_resources={
+        "prompt_template": PromptTemplate(
+            template="Answer this question: {question}",
+            engine="f-string"
+        )
+    },
+    adapter=TraceToMessages(),
+    llm_proxy=llm_proxy_config,
+    strategy="shm",  # Shared memory strategy
+)
+
+# Training data
+train_tasks = [
+    {"question": "What is 2+2?", "expected": "4"},
+    {"question": "Capital of France?", "expected": "Paris"},
+    {"question": "Largest planet?", "expected": "Jupiter"},
+]
+
+val_tasks = [
+    {"question": "What is 3*3?", "expected": "9"},
+    {"question": "Capital of Japan?", "expected": "Tokyo"},
+]
+
+# Run training
+trainer.fit(
+    agent=my_agent,
+    train_dataset=train_tasks,
+    val_dataset=val_tasks,
+)
+
+# Get the optimized prompt
+best_prompt = algo.get_best_prompt()
+print(f"Best prompt: {best_prompt.template}")
+```
+
+### GEPA Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_metric_calls` | 100 | Total evaluation budget |
+| `reflection_minibatch_size` | 4 | Tasks per reflection batch |
+| `rollout_batch_timeout` | 300.0 | Timeout in seconds per batch |
+| `skip_perfect_score` | True | Skip reflection on perfect scores |
+| `reflection_prompt_template` | - | Custom reflection prompt |
+
+### How GEPA Works
+
+1. **Run rollouts** - Execute agent on training tasks
+2. **Collect failures** - Gather tasks with low rewards
+3. **Reflect** - Use LLM to analyze failures and propose improvements
+4. **Update prompt** - Apply the improved prompt template
+5. **Repeat** - Continue until budget exhausted or convergence
+
+## APO (Automatic Prompt Optimization)
+
+APO uses gradient-based beam search for prompt optimization:
+
+```python
+from openai import AsyncOpenAI
+from mantisdk.algorithm import APO
+from mantisdk.adapter import TraceToMessages
+
+algo = APO(
+    AsyncOpenAI(),
+    val_batch_size=10,        # Validation batch size
+    gradient_batch_size=4,     # Gradient computation batch
+    beam_width=2,              # Beam search width
+    branch_factor=2,           # Branches per beam
+    beam_rounds=3,             # Number of rounds
+)
+
+trainer = Trainer(
+    algorithm=algo,
+    n_runners=8,
+    initial_resources={"prompt_template": baseline_prompt},
+    adapter=TraceToMessages(),
+)
+trainer.fit(agent=my_agent, train_dataset=train_data, val_dataset=val_data)
+```
+
+## VERL (Verified Reinforcement Learning)
+
+For fine-tuning language models with RL:
+
+```python
+from mantisdk.algorithm import VERL
+
+algo = VERL(
+    model_path="meta-llama/Llama-2-7b",
+    learning_rate=1e-5,
+)
+
+trainer = Trainer(algorithm=algo, n_runners=4)
+trainer.fit(agent=my_agent, train_dataset=tasks)
+```
+
+## FastAlgorithm / Baseline
+
+For quick testing without real optimization:
+
+```python
+from mantisdk.algorithm import Baseline
+
+# Baseline runs rollouts without optimization
+trainer = Trainer(algorithm=Baseline(), n_runners=2)
+trainer.dev(agent=my_agent, train_dataset=tasks)
+```
+
+## trainer.fit() vs trainer.dev()
+
+### `trainer.fit()`
+
+Full training loop with algorithm optimization:
+
+```python
+trainer = Trainer(
+    algorithm=GEPA(),
+    n_runners=4,
+)
+trainer.fit(
+    agent=my_agent,
+    train_dataset=train_tasks,
+    val_dataset=val_tasks,
+)
+```
+
+### `trainer.dev()`
+
+Development mode for fast iteration:
+
+- Uses `FastAlgorithm` or `Baseline` only
+- Synchronous execution for easier debugging
+- No actual optimization
+
+```python
+trainer = Trainer(n_runners=1)
+trainer.dev(agent=my_agent, train_dataset=tasks)
+```
+
+## LLM Proxy
+
+GEPA and other algorithms use the LLM proxy to intercept and track LLM calls:
+
+```python
+llm_proxy_config = {
+    "type": "mantisdk.LLMProxy",
+    "model_list": [
+        {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": {"model": "gpt-4o-mini"}
+        },
+        {
+            "model_name": "gpt-4o",
+            "litellm_params": {"model": "gpt-4o"}
+        }
+    ],
+    "callbacks": ["opentelemetry"],
+    "launch_mode": "thread",
+}
+
+trainer = Trainer(
+    algorithm=algo,
+    llm_proxy=llm_proxy_config,
+    # ...
+)
+```
+
+In your agent, use the proxy endpoint:
+
+```python
+@rollout
+def my_agent(task, prompt_template, llm: LLM):
+    client = OpenAI(
+        base_url=llm.endpoint,  # Use proxy endpoint
+        api_key=llm.api_key or "dummy",
+    )
+    # ...
+```
+
+## Trace Adapters
+
+Adapters transform traces into algorithm-consumable formats:
+
+### TraceToMessages
+
+Converts spans to chat messages (used by GEPA and APO):
+
+```python
+from mantisdk.adapter import TraceToMessages
+
+adapter = TraceToMessages()
+trainer = Trainer(algorithm=algo, adapter=adapter)
+```
+
+### TracerTraceToTriplet
+
+Converts spans to (input, output, reward) triplets:
+
+```python
+from mantisdk.adapter import TracerTraceToTriplet
+
+adapter = TracerTraceToTriplet(
+    agent_match="my_agent",  # Filter by agent name
+)
+trainer = Trainer(algorithm=algo, adapter=adapter)
+```
+
+## Execution Strategies
+
+### Shared Memory (shm)
+
+Best for single-machine training:
+
+```python
+trainer = Trainer(
+    strategy="shm",
+    n_runners=4,
+)
+```
+
+### Client-Server
+
+For distributed training across machines:
+
+```bash
+# Start store server
+msk store --port 45993
+```
+
+```python
+from mantisdk.store import LightningStoreClient
+
+trainer = Trainer(
+    store=LightningStoreClient("http://server:45993"),
+    n_runners=16,
+)
+```
+
+## Hooks
+
+Add custom behavior at various lifecycle points:
+
+```python
+from mantisdk.types import Hook
+
+class LoggingHook(Hook):
+    def on_rollout_start(self, task, runner, tracer):
+        print(f"Starting rollout: {task}")
+
+    def on_rollout_end(self, task, rollout, runner, tracer):
+        print(f"Finished rollout: {rollout.rollout_id}")
+
+trainer = Trainer(
+    hooks=[LoggingHook()],
+    n_runners=4,
+)
+```

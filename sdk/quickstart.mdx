@@ -1,0 +1,202 @@
+---
+title: "Quickstart"
+description: "Build and train your first agent in 5 minutes"
+---
+
+# Quickstart
+
+This guide walks you through creating a trainable agent, running it, and emitting rewards for optimization.
+
+## Prerequisites
+
+```bash
+pip install mantisdk openai
+```
+
+Set your OpenAI API key:
+
+```bash
+export OPENAI_API_KEY="your-key-here"
+```
+
+## Step 1: Emit Rewards
+
+The most important concept in mantisdk is **emitting rewards**. This is how your agent communicates its performance to the training system:
+
+```python
+import mantisdk as msk
+
+# After your agent does something, tell the system how well it did
+msk.emit_reward(0.85)  # 0.0 = bad, 1.0 = perfect
+```
+
+That's it. Everything else builds on this simple call.
+
+## Step 2: Create an Agent
+
+Wrap your agent logic with the `@rollout` decorator:
+
+```python
+from openai import OpenAI
+import mantisdk as msk
+from mantisdk.litagent import rollout
+
+@rollout
+def math_agent(task: dict) -> float:
+    """An agent that solves math problems."""
+    client = OpenAI()
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "Solve the math problem. Return only the number."},
+            {"role": "user", "content": task["question"]}
+        ]
+    )
+
+    answer = response.choices[0].message.content.strip()
+
+    # Calculate reward based on correctness
+    reward = 1.0 if answer == str(task["expected"]) else 0.0
+
+    # THIS IS THE KEY PART - emit the reward
+    msk.emit_reward(reward)
+
+    return reward
+```
+
+## Step 3: Run with Trainer
+
+```python
+from mantisdk import Trainer
+
+# Create training data
+tasks = [
+    {"question": "What is 2 + 2?", "expected": 4},
+    {"question": "What is 10 * 5?", "expected": 50},
+    {"question": "What is 100 / 4?", "expected": 25},
+]
+
+# Create trainer and run
+trainer = Trainer(n_runners=1)
+trainer.dev(agent=math_agent, train_dataset=tasks)
+```
+
+## Complete Example
+
+Here's everything together:
+
+```python
+from openai import OpenAI
+import mantisdk as msk
+from mantisdk import Trainer
+from mantisdk.litagent import rollout
+
+@rollout
+def math_agent(task: dict) -> float:
+    """An agent that solves math problems."""
+    client = OpenAI()
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "Solve the math problem. Return only the number."},
+            {"role": "user", "content": task["question"]}
+        ]
+    )
+
+    answer = response.choices[0].message.content.strip()
+    reward = 1.0 if answer == str(task["expected"]) else 0.0
+    msk.emit_reward(reward)
+    return reward
+
+# Training data
+tasks = [
+    {"question": "What is 2 + 2?", "expected": 4},
+    {"question": "What is 10 * 5?", "expected": 50},
+    {"question": "What is 100 / 4?", "expected": 25},
+]
+
+# Run
+trainer = Trainer(n_runners=1)
+trainer.dev(agent=math_agent, train_dataset=tasks)
+```
+
+## Understanding Rewards
+
+### Single Value
+
+```python
+msk.emit_reward(0.85)
+```
+
+### Multi-Dimensional
+
+Track multiple aspects of performance:
+
+```python
+msk.emit_reward(
+    {"accuracy": 0.9, "efficiency": 0.7, "safety": 1.0},
+    primary_key="accuracy"  # Required for multi-dimensional
+)
+```
+
+### Boolean Outcomes
+
+```python
+success = result == expected
+msk.emit_reward(1.0 if success else 0.0)
+```
+
+## Using LitAgent Class
+
+For more complex agents, subclass `LitAgent`:
+
+```python
+from mantisdk import LitAgent, Trainer
+import mantisdk as msk
+from mantisdk.types import NamedResources, Rollout
+
+class ChatAgent(LitAgent):
+    def rollout(self, task: dict, resources: NamedResources, rollout: Rollout):
+        # Access resources (prompts, configs, etc.)
+        system_prompt = resources.get("system_prompt", "You are helpful.")
+
+        # Run your agent logic
+        response = self.call_llm(task["input"], system_prompt)
+
+        # Emit reward
+        reward = self.evaluate(response, task["expected"])
+        msk.emit_reward(reward)
+
+        return None
+
+# Usage
+agent = ChatAgent()
+trainer = Trainer(
+    n_runners=2,
+    initial_resources={"system_prompt": "You are a coding assistant."}
+)
+trainer.dev(agent=agent, train_dataset=tasks)
+```
+
+## Async Agents
+
+For async operations, implement `rollout_async`:
+
+```python
+from mantisdk import LitAgent
+import mantisdk as msk
+
+class AsyncAgent(LitAgent):
+    async def rollout_async(self, task, resources, rollout):
+        result = await self.async_process(task)
+        msk.emit_reward(result["score"])
+        return None
+```
+
+## Next Steps
+
+- Learn about [tracing and observability](/sdk/tracing)
+- Explore [training algorithms like GEPA](/sdk/training)
+- Set up [stores for distributed training](/sdk/stores)
