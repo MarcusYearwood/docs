@@ -39,9 +39,9 @@ trainer.fit(agent=my_agent, train_dataset=tasks, val_dataset=val_tasks)
 | `adapter` | `TraceAdapter` | Converts traces to algorithm input |
 | `llm_proxy` | `LLMProxy` | Proxy for LLM calls (used by GEPA) |
 
-## GEPA (Guided Evolution for Prompt Adaptation)
+## GEPA (Genetic-Pareto)
 
-GEPA is the recommended algorithm for prompt optimization. It reflects on failed rollouts and proposes improved prompts.
+GEPA is the recommended algorithm for prompt optimization. It uses an evolutionary approach with Pareto optimization to reflect on failed rollouts and propose improved prompts.
 
 ### Complete GEPA Example
 
