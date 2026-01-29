@@ -1,0 +1,113 @@
+---
+title: "Semantic Attributes"
+description: "Reference for trace and observation attributes recognized by Insight"
+---
+
+# Semantic Attributes
+
+Insight recognizes a set of semantic attributes that provide rich context for your traces and observations. These attributes enable filtering, searching, and analysis in the Insight dashboard.
+
+<Note>
+These attributes are automatically extracted from instrumented libraries. You can also set them manually using `span.set_attribute()` in your OpenTelemetry instrumentation.
+</Note>
+
+## Trace-level Attributes
+
+Attributes that apply to the entire trace (root span).
+
+| Attribute | Description |
+|-----------|-------------|
+| `trace.name` | Name of the trace |
+| `trace.input` | Input data for the trace |
+| `trace.output` | Output data for the trace |
+| `trace.metadata` | Additional metadata |
+| `trace.public` | Whether trace is public |
+| `trace.tags` | Searchable tags |
+
+## User & Session
+
+Attributes for tracking users and conversations.
+
+| Attribute | Description |
+|-----------|-------------|
+| `user.id` | User identifier |
+| `session.id` | Session/conversation identifier |
+
+## Environment & Version
+
+Attributes for deployment context.
+
+| Attribute | Description |
+|-----------|-------------|
+| `environment` | Deployment environment (e.g., production, staging) |
+| `version` | Service version |
+| `release` | Release identifier |
+
+## Observation-level Attributes
+
+Attributes that apply to individual spans within a trace.
+
+| Attribute | Description |
+|-----------|-------------|
+| `observation.type` | Type of observation (e.g., LLM, tool) |
+| `observation.input` | Input to the observation |
+| `observation.output` | Output from the observation |
+| `observation.metadata` | Additional metadata |
+| `observation.level` | Log level |
+| `observation.status_message` | Status message |
+
+## Model & Generation
+
+Attributes specific to LLM calls.
+
+| Attribute | Description |
+|-----------|-------------|
+| `model.name` | Model identifier |
+| `model.parameters` | Model configuration parameters |
+| `completion_start_time` | When generation started |
+
+## Usage & Cost
+
+Token usage and cost tracking attributes.
+
+| Attribute | Description |
+|-----------|-------------|
+| `usage.input_tokens` | Input/prompt token count |
+| `usage.output_tokens` | Output/completion token count |
+| `usage.total_tokens` | Total token count |
+
+## Setting Attributes Manually
+
+While instrumented libraries automatically set these attributes, you can also set them manually:
+
+```python
+from opentelemetry import trace
+
+tracer = trace.get_tracer(__name__)
+
+with tracer.start_as_current_span("my-operation") as span:
+    span.set_attribute("user.id", "user-123")
+    span.set_attribute("session.id", "session-456")
+    span.set_attribute("environment", "production")
+
+    # Your LLM call here
+    result = call_llm(prompt)
+
+    span.set_attribute("usage.input_tokens", result.usage.input_tokens)
+    span.set_attribute("usage.output_tokens", result.usage.output_tokens)
+```
+
+## Attribute Normalization
+
+Insight automatically normalizes attributes from various telemetry sources:
+
+- **OpenInference** - Attributes from Arize Phoenix instrumentation
+- **Vercel AI SDK** - Attributes from Vercel's AI SDK
+- **OTel GenAI** - OpenTelemetry semantic conventions for generative AI
+- **Custom attributes** - Your own span attributes
+
+This normalization ensures consistent data regardless of which instrumentation library you use. For example, token counts from different sources are all mapped to the standard `usage.*` attributes.
+
+<Info>
+If you're using mantisdk's `tracing.instrument()`, attributes are automatically captured from supported libraries. See the [Tracing documentation](/sdk/tracing) for details on auto-instrumentation.
+</Info>

@@ -1,0 +1,70 @@
+---
+title: "Introduction"
+description: "AI observability platform for LLM applications"
+---
+
+# Insight
+
+Insight is the observability component of Metis, providing comprehensive tracing and monitoring for your AI applications. It captures and visualizes the full execution flow of your LLM-powered systems.
+
+## Overview
+
+Insight automatically collects telemetry data from your AI applications using OpenTelemetry (OTel), giving you visibility into:
+
+- **Trace visualization** - See the complete execution flow of your AI agents
+- **Token usage** - Track input, output, and total tokens across models
+- **Cost monitoring** - Monitor API costs across providers
+- **Latency analysis** - Identify performance bottlenecks
+- **Error tracking** - Debug failed requests and exceptions
+
+## How It Works
+
+Insight leverages the OpenTelemetry standard to capture spans from your application. When you instrument your code with mantisdk's tracing module, telemetry is automatically collected and sent to Insight for analysis.
+
+```python
+import mantisdk.tracing as tracing
+
+# Initialize and auto-instrument
+tracing.init()
+tracing.instrument()
+
+# Your LLM calls are now traced automatically
+```
+
+## Key Features
+
+### Automatic Instrumentation
+
+Insight supports automatic instrumentation for popular LLM libraries through OpenInference:
+
+- OpenAI, Anthropic, Mistral, Groq
+- LangChain, LlamaIndex, DSPy
+- Claude Agent SDK, CrewAI
+- AWS Bedrock, Google VertexAI
+- And many more
+
+### Semantic Attributes
+
+Insight recognizes and indexes [semantic attributes](/insight/attributes) from your traces, enabling rich filtering and analysis. These attributes are automatically extracted from instrumented libraries or can be set manually.
+
+### Multi-Source Normalization
+
+Insight normalizes telemetry from various sources:
+
+- OpenInference conventions
+- Vercel AI SDK
+- OTel GenAI semantic conventions
+- Custom span attributes
+
+This means you get consistent data regardless of which instrumentation library you use.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Semantic Attributes" icon="tags" href="/insight/attributes">
+    Reference for all recognized trace attributes
+  </Card>
+  <Card title="SDK Tracing" icon="chart-line" href="/sdk/tracing">
+    Set up tracing in your application
+  </Card>
+</CardGroup>

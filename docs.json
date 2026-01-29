@@ -26,6 +26,18 @@
             ]
           }
         ]
+      },
+      {
+        "tab": "Insight",
+        "groups": [
+          {
+            "group": "Insight",
+            "pages": [
+              "insight/introduction",
+              "insight/attributes"
+            ]
+          }
+        ]
       }
     ]
   },
